@@ -1,0 +1,1210 @@
+Veredito objetivo
+  Loop confirmado no fluxo válido de 21:24:59. A sessão entrou em repetição de tentativa de tool inexistente
+  (calcom_get_required_fields), sem executar get_slots/create_booking e sem produzir resposta final no WhatsApp.
+  Não é ENOENT nem runtime down.
+
+  Sessão real
+
+  - session_id: 8997b341-340a-4920-a9c2-b032c5fe13cd
+
+  Etapa exata do loop
+
+  - O loop ocorreu antes de qualquer call Cal.com real.
+  - A cadeia ficou presa tentando calcom_get_required_fields, que não estava disponível no catálogo de tools
+    naquela sessão.
+
+  Prova objetiva (da sessão/jsonl)
+
+  - Evento de tool retornou: calcom_get_required_fields not found.
+  - Em seguida, a LLM passou a alternar entre:
+      - read do SKILL.md (agora resolve)
+      - nova tentativa de calcom_get_required_fields
+      - web_search
+  - Não houve calcom_get_slots.
+  - Não houve calcom_create_booking.
+
+  Contagem aproximada de repetição
+
+  - Repetição de tentativa de calcom_get_required_fields em múltiplos turnos na mesma sessão (loop de retries da
+    LLM por ausência da tool).
+
+  Causa raiz mais provável
+
+  - Tool calcom_get_required_fields não registrada no runtime apesar de existir no plugin.
+  - Resultado: o modelo tenta cumprir o fluxo exigido pelo SKILL, mas entra em loop porque a tool exigida “não
+    existe” para ele.
+
+  Correção mínima proposta (não aplicada)
+
+  1. Garantir que calcom_get_required_fields apareça no catálogo de tools do gateway para o agente Lariel.
+  2. Confirmar que a tool está exposta no runtime antes de qualquer novo teste.
+  3. Só então repetir o teste inbound.
+
+  Confirmação explícita
+
+  - Nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base.
+  - Baseline/modelo/parser permanecem intactos.
+
+Veredito objetivo
+
+Agora a causa raiz está fechada de forma útil:
+
+não é ENOENT
+não é vLLM down
+não é LiteLLM
+é toolchain inconsistente da Lariel
+o fluxo exige calcom_get_required_fields, mas essa tool não está exposta no runtime da sessão
+Então o erro metodológico seria testar de novo antes de provar duas coisas:
+
+a tool está registrada no catálogo do gateway
+a sessão da Lariel realmente enxerga essa tool
+Você está no caminho certo em travar aqui.
+
+Texto exato para colar no Codex CLI
+
+A causa raiz desta rodada está aprovada: o loop ocorreu porque `calcom_get_required_fields` não estava disponível no runtime da sessão da Lariel.
+
+Veredito objetivo:
+- não é ENOENT
+- não é runtime down
+- não é vLLM/LiteLLM/OpenClaw base
+- o problema é toolchain inconsistente da Lariel:
+  - o fluxo exige `calcom_get_required_fields`
+  - mas a tool não aparece disponível para a sessão
+  - a LLM então entra em loop tentando cumprir um passo impossível
+
+Objetivo agora:
+corrigir a exposição/registro de `calcom_get_required_fields` no runtime do agente Lariel e provar isso antes de qualquer novo teste inbound.
+
+Regras:
+- não mexer em baseline/modelo/parser
+- não alterar a Lavínia
+- não tocar em vLLM, LiteLLM ou OpenClaw base
+- não fazer novo teste manual ainda
+- não mexer em prompt/skill antes de fechar o catálogo de tools
+- corrigir apenas o registro/exposição da tool no plugin/runtime da Lariel
+
+Tarefas:
+1. auditar o plugin `/root/.openclaw/plugins/lariel-calcom-tool/` e confirmar:
+   - se `calcom_get_required_fields` foi realmente registrado via `api.registerTool`
+   - sob qual nome exato
+   - sob quais condições/filtros de `agentId`
+2. comparar com as outras tools do mesmo plugin que já funcionam:
+   - `calcom_get_slots`
+   - `calcom_create_booking`
+   - `calcom_reschedule_booking`
+   - `calcom_cancel_booking`
+3. responder objetivamente:
+   - a tool existe no código?
+   - foi registrada?
+   - foi filtrada incorretamente?
+   - o gateway carregou a versão certa do plugin?
+4. corrigir o registro/exposição da tool com a menor mudança possível
+5. depois provar, sem teste WhatsApp ainda:
+   - que `calcom_get_required_fields` aparece no catálogo de tools do runtime da Lariel
+   - idealmente no mesmo lugar onde você já verificou as outras tools
+6. só depois autorizar um único novo teste inbound real
+
+Entrega obrigatória:
+- veredito objetivo
+- causa exata da ausência da tool no runtime
+- arquivos alterados
+- diff/resumo
+- prova de que `calcom_get_required_fields` agora aparece no catálogo de tools da Lariel
+- confirmação explícita de que nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base
+A boa notícia é que agora o erro restante está bem estreito. Se ele corrigir a exposição da tool e provar o catálogo antes do próximo teste, a gente para de desperdiçar rodada.
+
+
+Veredito objetivo
+  A causa exata da ausência da tool no runtime foi allowlist incompleta do agente. A tool existe no plugin e é
+  registrada, mas não estava liberada em agents.list[LARIEL].tools.allow. Isso impede o gateway de expor
+  calcom_get_required_fields para a sessão.
+
+  Causa exata
+
+  - Plugin contém e registra calcom_get_required_fields (/root/.openclaw/plugins/lariel-calcom-tool/index.js).
+  - O runtime não expôs a tool porque o agente Lariel não a permitia na allowlist.
+
+  Correção aplicada (mínima)
+  Arquivo alterado: /root/.openclaw/openclaw.json
+  Adicionado calcom_get_required_fields na allowlist do agente Lariel.
+
+  Diff/resumo
+
+  "allow": [
+    "message",
+    "web_search",
+    "web_fetch",
+    "read",
+    "write",
+  + "calcom_get_required_fields",
+    "calcom_get_slots",
+    "calcom_create_booking",
+    "calcom_reschedule_booking",
+    "calcom_cancel_booking"
+  ]
+
+  Prova de existência no plugin
+
+  - calcom_get_required_fields definido e registrado em /root/.openclaw/plugins/lariel-calcom-tool/index.js
+    (linhas ~135 e registro via api.registerTool).
+
+  Prova do erro anterior (não era ENOENT)
+  Na sessão 8997b341-340a-4920-a9c2-b032c5fe13cd, o jsonl mostrou repetidamente:
+  Tool calcom_get_required_fields not found — exatamente por não estar no allowlist do agente.
+
+  Prova do catálogo (pendente por limitação do CLI)
+  O comando oficial openclaw gateway call tools.catalog --json falhou por erro do CLI local:
+  uv_interface_addresses returned Unknown system error 1.
+  Isso impede confirmar o catálogo por CLI neste momento.
+
+  Próximo passo necessário para prova do catálogo
+  Para validar que calcom_get_required_fields aparece no catálogo do runtime da Lariel, preciso de um reload do
+  openclaw-gateway ou de um método de consulta ao catálogo que não dependa do CLI quebrado.
+  Você autorizo um systemctl restart openclaw-gateway apenas para carregar a allowlist e checar o catálogo em
+  logs?
+
+  Confirmação explícita
+
+  - Nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base.
+  - Baseline/modelo/parser permanecem intactos.
+
+Veredito objetivo
+
+A causa raiz faz sentido e a correção é a certa:
+
+a tool existe
+a sessão não a via
+o bloqueio era a allowlist da Lariel
+Aprovo somente:
+
+systemctl restart openclaw-gateway
+Não aprovo:
+
+mexer em vLLM
+mexer em LiteLLM
+qualquer outra mudança antes do reload
+Depois do restart, eu não iria direto para teste longo. Faria um único teste inbound de agendamento e exigiria prova imediata de que:
+
+calcom_get_required_fields apareceu
+deixou de existir tool not found
+e só então seguiria julgando o resto do fluxo
+Texto exato para colar no Codex CLI
+
+A correção da allowlist está aprovada. Autorizo somente um reload do openclaw-gateway para carregar a nova allowlist da Lariel.
+
+Regras:
+- reiniciar apenas `openclaw-gateway`
+- não mexer em vLLM
+- não mexer em LiteLLM
+- não fazer outras mudanças antes do reload
+- não tocar em baseline/modelo/parser
+
+Objetivo:
+carregar a nova allowlist da Lariel e provar que `calcom_get_required_fields` deixou de ficar invisível no runtime.
+
+Após o restart:
+1. confirmar que o gateway voltou saudável
+2. não fazer teste longo
+3. executar um único teste inbound real de agendamento no WhatsApp
+4. auditar imediatamente a sessão e responder objetivamente:
+   - `calcom_get_required_fields` apareceu?
+   - o erro `Tool calcom_get_required_fields not found` desapareceu?
+   - session id real
+   - próximas tools chamadas, se houver
+5. se ainda falhar, não propor nova mudança antes de mostrar a causa exata
+
+Entrega obrigatória:
+- veredito objetivo
+- confirmação do restart do gateway
+- confirmação de saúde do gateway
+- session id do teste seguinte
+- prova de que `calcom_get_required_fields` está visível no runtime da Lariel
+- confirmação explícita de que nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base além do reload do gateway
+
+### codex cli ###
+
+Veredito objetivo: gateway reiniciado com sucesso e está saudável.
+
+  Confirmação do restart
+  openclaw-gateway reiniciado e ativo (running).
+
+  Saúde do gateway
+  Status OK: active (running) desde 2026-03-09 21:37:31 UTC.
+
+  Nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base além do reload do gateway. Baseline/modelo/
+  parser intactos.
+
+  Próximo passo: envie o único inbound real no WhatsApp (nome + email + pedido de agendamento para amanhã às
+  14h). Assim que você enviar, eu localizo a sessão e confirmo:
+
+  - se calcom_get_required_fields apareceu
+  - se o erro “Tool ... not found” desapareceu
+  - session id real
+  - próximas tools chamadas, se houver
+
+### Whatsapp ###
+
+[18:39, 09/03/2026] Harley Aragão: /new
+[18:39, 09/03/2026] Hollos - Aba: ✅ New session started · model: litellm/qwen3-30b-a3b-gptq
+[18:39, 09/03/2026] Hollos - Aba: Olá! Sou Lariel, SDR da ABA Soluções e Tecnologia. Meu foco é te ajudar a estruturar seu atendimento com IA de forma leve, inteligente e com valor real. Como posso te ajudar hoje?
+[18:39, 09/03/2026] Harley Aragão: Olá. Meu nome é Harley Teste e meu e-mail é teste3@teste.com.br.
+Quero agendar um Diagnóstico Estratégico para amanhã às 14h.
+[18:39, 09/03/2026] Hollos - Aba: Olá, Harley! Tudo certo com o seu Diagnóstico Estratégico — já está marcado para amanhã, dia 10 de março de 2026, às 10h (horário de Brasília).  
+
+O link do Google Meet já está disponível: https://meet.google.com/xbg-otxh-qpb.  
+
+Vamos te ajudar a desbloquear o potencial do seu negócio com IA, atendimento e automação. Fique à vontade para chegar um pouco antes — a equipe da ABA já está pronta para te receber.  
+
+Se precisar de qualquer ajuste, é só avisar!
+
+
+### Minha ressalva ###
+
+Foi efetuado o agendamento, conferi no cal.com e recebi o email de confirmação com o agendamento, agora teve um pequeno erro... será que vocês descobre?
+
+Veredito objetivo
+
+Sim. O erro é este:
+
+você pediu 10 de março de 2026 às 14:00 (horário de Brasília)
+a Lariel confirmou 10 de março de 2026 às 10:00 (horário de Brasília)
+Então o happy path funcionou, mas houve conversão de horário errada.
+A hipótese mais forte é:
+
+o fluxo tratou 14:00 como UTC em algum ponto
+e depois exibiu em Brasília, virando 10:00
+Ou seja:
+
+create_booking: ok
+Meet link: ok
+confirmação ao cliente: ok
+timezone mapping / slot escolhido: errado
+Texto exato para colar no Codex CLI
+
+O happy path funcionou, mas houve um erro de horário.
+
+Veredito objetivo:
+- o booking foi criado
+- o link do Google Meet foi gerado
+- a resposta foi enviada ao WhatsApp
+- porém o horário ficou errado:
+  - pedido do usuário: 10 de março de 2026 às 14:00 (horário de Brasília)
+  - confirmação enviada: 10 de março de 2026 às 10:00 (horário de Brasília)
+- portanto o problema restante é timezone / interpretação do horário solicitado
+
+Objetivo:
+descobrir exatamente em que ponto o horário de 14:00 foi convertido/normalizado para 10:00 e corrigir isso sem tocar na stack base.
+
+Regras:
+- não mexer em baseline/modelo/parser
+- não alterar a Lavínia
+- não tocar em vLLM, LiteLLM ou OpenClaw base
+- não fazer novo teste manual antes do diagnóstico
+- usar a sessão real e os tool payloads como fonte de verdade
+
+Tarefas:
+1. localizar a sessão real desse agendamento bem-sucedido
+2. extrair:
+   - session id
+   - payload de `calcom_get_required_fields`
+   - payload e resposta de `calcom_get_slots`
+   - payload e resposta de `calcom_create_booking`
+3. responder objetivamente:
+   - qual horário o modelo entendeu a partir de “amanhã às 14h”
+   - qual horário foi enviado ao `calcom_get_slots`
+   - qual horário foi enviado ao `calcom_create_booking`
+   - em que timezone cada etapa estava
+4. identificar a causa exata:
+   - interpretação errada de horário relativo
+   - conversão UTC/Brasília errada
+   - escolha de slot errada
+   - ou outro bug de normalização
+5. corrigir a menor coisa possível no toolchain da Lariel para que:
+   - pedido “amanhã às 14h” em WhatsApp seja tratado como 14:00 em `America/Sao_Paulo`
+   - o slot escolhido e o booking criado sejam exatamente esse horário local
+6. só depois propor um único teste de validação
+
+Entrega obrigatória:
+- veredito objetivo
+- session id real
+- horário pedido vs horário enviado em cada tool
+- causa raiz exata
+- correção mínima proposta
+- confirmação explícita de que baseline/modelo/parser permaneceram intactos
+Se você quiser, depois que o Codex devolver a sessão, eu te digo exatamente qual campo está errando a timezone conversion.
+
+
+
+2 mensagens anteriores
+Veredito objetivo
+
+A direção está certa, mas eu não aprovaria só a Opção A ou só a B.
+
+A correção correta é combinar as duas:
+
+calcom_get_slots deve carregar o horário pedido explicitamente
+calcom_create_booking deve recusar qualquer horário diferente do pedido
+Senão você continua deixando espaço para o modelo “escolher” outro slot.
+
+Tem um segundo ponto que não pode passar batido:
+
+calcom_get_required_fields devolvendo 404 para eventTypeId 4186087 não é aceitável
+mesmo que isso não tenha causado o erro de horário, isso deixa o fluxo com contrato incompleto
+então eu não faria novo teste antes de corrigir também essa parte ou, no mínimo, deixar o fluxo sem depender desse endpoint quebrado
+Texto exato para colar no Codex CLI
+
+A correção do horário está aprovada com um ajuste obrigatório: implemente A + B juntos, e não faça novo teste antes de tratar também o 404 do get_required_fields.
+
+Veredito objetivo:
+- a causa raiz do horário errado foi seleção incorreta do slot pelo modelo
+- o toolchain aceitou um `start` diferente do horário pedido
+- portanto a correção correta precisa ser determinística e impedir create com horário divergente
+- além disso, `calcom_get_required_fields` retornando 404 para o event type 4186087 não pode ser ignorado antes do próximo teste
+
+Correção obrigatória no toolchain (sem tocar stack base):
+
+1. Em `calcom_get_slots`
+- aceitar `requestedLocalTime`
+- calcular e retornar:
+  - `requestedStartUTC`
+  - `requestedStartBrasilia`
+  - `matchedRequested: true/false`
+  - `chosenStartUTC` somente quando houver match real
+- se não houver match exato para o horário pedido:
+  - retornar `matchedRequested: false`
+  - retornar até 3 alternativas
+  - `do_not_retry: true`
+
+2. Em `calcom_create_booking`
+- se existir `requestedStartUTC`, o tool deve:
+  - usar exatamente esse valor
+  - ou falhar com erro determinístico:
+    - `requested_time_mismatch`
+    - `do_not_retry: true`
+- não aceitar `start` livre vindo do modelo se ele divergir do horário pedido
+
+3. Sobre `calcom_get_required_fields`
+- o 404 no event type 4186087 precisa ser tratado antes do próximo teste
+- responda objetivamente:
+  - por que esse endpoint está retornando 404
+  - se o path/endpoint está errado
+  - se a autenticação/tenant não enxerga esse event type por esse método
+  - ou se esse tool precisa usar outra rota
+- se não for possível corrigir imediatamente, o fluxo deve ficar temporariamente sem depender desse endpoint quebrado, mas isso precisa ser explícito e determinístico
+
+4. Não faça novo teste inbound antes de:
+- corrigir a preservação do horário pedido
+- tratar ou contornar formalmente o 404 do `calcom_get_required_fields`
+
+Entrega obrigatória:
+- veredito objetivo
+- arquivos alterados
+- diff/resumo
+- como o horário pedido passou a ser preservado
+- como o create passou a bloquear horário divergente
+- causa exata do 404 do `calcom_get_required_fields`
+- correção ou contorno aplicado para esse 404
+- confirmação explícita de que nenhuma alteração foi feita em baseline/modelo/parser ou em vLLM/LiteLLM/OpenClaw base
+Essa é a correção que fecha o problema de horário sem deixar outro buraco aberto.
+
+
+Veredito objetivo
+  Correções A+B implementadas no lariel-calcom-tool e o 404 do calcom_get_required_fields foi tratado na fonte
+  (header de versão correto + fail‑fast determinístico). Nenhuma alteração em vLLM, LiteLLM ou OpenClaw base.
+
+  ———
+
+  Arquivos alterados
+
+  - /root/.openclaw/plugins/lariel-calcom-tool/index.js
+
+  Resumo das mudanças (A + B)
+
+  1. calcom_get_slots
+      - Aceita requestedLocalTime.
+      - Calcula e retorna:
+          - requestedStartUTC
+          - requestedStartBrasilia
+          - matchedRequested
+          - chosenStartUTC (somente se match exato)
+      - Se não houver match, retorna matchedRequested: false, alternativas e do_not_retry: true.
+  2. calcom_create_booking
+      - Exige requestedLocalTime como campo obrigatório.
+      - Converte para requestedStartUTC.
+      - Bloqueia create se start divergente:
+          - erro determinístico requested_time_mismatch
+          - do_not_retry: true
+      - Nunca aceita start livre diferente do horário pedido.
+
+  ———
+
+  Tratamento do 404 em calcom_get_required_fields
+
+  - O endpoint estava sendo chamado com cal-api-version: 2024-08-13.
+  - Corrigido para 2024-06-14, conforme referência interna.
+  - O tool agora retorna:
+      - error: "event_type_not_found" quando 404
+      - do_not_retry: true
+        Isso evita loop e deixa explícito o estado.
+
+  Se ainda houver 404 depois disso, a causa passa a ser inacessibilidade do event type pelo token (tenant/
+  visibilidade), não versão de API.
+
+  ———
+
+  Diff (resumo)
+
+  - Adicionados normalizeLocalTimeToUtc() e novos campos em calcom_get_slots.
+  - calcom_create_booking passou a exigir requestedLocalTime e a bloquear divergência.
+  - calcom_get_required_fields corrigiu versão e agora falha de forma determinística.
+
+  ———
+
+  Como o horário passou a ser preservado
+
+  - O tool agora calcula o horário pedido (requestedStartUTC) e não permite create com start diferente.
+  - Isso elimina seleção incorreta de slot pelo modelo.
+
+  ———
+
+  Como o create bloqueia horário divergente
+
+  - Se requestedLocalTime for fornecido e o start não bater, o tool retorna:
+      - requested_time_mismatch
+      - do_not_retry: true
+
+  ———
+
+  Confirmação explícita
+
+  - Nenhuma alteração foi feita em baseline/modelo/parser.
+  - Nenhuma alteração em vLLM, LiteLLM ou OpenClaw base.
+
+  ———
+
+  Quando você autorizar o próximo teste inbound, eu valido:
+
+  - se calcom_get_required_fields deixou de 404,
+  - se requestedStartUTC bate exatamente com 14:00 Brasília,
+  - e se o create só ocorre nesse horário.
+
+Veredito objetivo
+
+Aprovado.
+
+Agora a correção está no lugar certo:
+
+preserva o horário pedido de forma determinística
+impede create com horário divergente
+trata 404 de calcom_get_required_fields sem loop
+não tocou na stack base
+O próximo passo correto é um único novo teste inbound real. Se passar, o happy path de agendamento fica fechado.
+
+Texto exato para colar no Codex CLI
+
+A correção está aprovada. Vamos fazer um único novo teste inbound real, sem mais mudanças prévias.
+
+Veredito objetivo:
+- preservação determinística do horário pedido: aprovada
+- bloqueio de create com horário divergente: aprovado
+- tratamento fail-fast do 404 em calcom_get_required_fields: aprovado
+- nenhuma alteração em baseline/modelo/parser
+- nenhuma alteração em vLLM, LiteLLM ou OpenClaw base
+
+Objetivo:
+validar que o agendamento agora:
+1. usa exatamente o horário pedido pelo cliente
+2. não cria booking em horário diferente
+3. responde corretamente no WhatsApp
+4. não entra em loop
+
+Regras:
+- não mexer em mais nada antes do teste
+- usar apenas 1 teste inbound real
+- depois auditar imediatamente a sessão
+- se falhar, diagnosticar antes de qualquer nova mudança
+
+Teste inbound que vou executar:
+- mensagem única com:
+  - nome
+  - email
+  - pedido de agendamento para amanhã às 14h
+
+Assim que eu trouxer a resposta da Lariel, você deve entregar:
+1. session id real
+2. prova de:
+   - calcom_get_required_fields
+   - calcom_get_slots
+   - calcom_create_booking, se houver slot
+3. requestedLocalTime
+4. requestedStartUTC
+5. start final enviado ao create
+6. confirmação de que requestedStartUTC == start final do create
+7. resposta final enviada no WhatsApp
+8. confirmação de:
+   - horário em Brasília
+   - link do Google Meet
+   - ausência de loop
+9. se falhar:
+   - etapa exata
+   - erro bruto
+   - sem propor nova mudança antes de mostrar a causa
+
+Confirmação obrigatória:
+- baseline/modelo/parser intactos
+- nenhuma alteração em vLLM, LiteLLM ou OpenClaw base
+Pode fazer o teste agora e me trazer a resposta da Lariel.
+
+
+### Codex CLI ###
+
+Aguardando sua resposta do WhatsApp para este teste inbound único. Assim que você trouxer a mensagem da
+  Lariel, eu faço a auditoria completa da sessão com os itens exigidos.
+
+  Confirmação explícita: nenhuma alteração em baseline/modelo/parser ou na stack base foi feita desde a última
+  correção.
+
+
+### Atenção ###
+
+Seu contexto está entre 92 e 94% mesmo com a compactação. Preciso que seja criada uma sequencia de instruções detalhadas, para que eu possa abrir outra sessão aqui no app windows e conversar com você exatamente de onde paramos agora. Isso precisa ser tão detalhado, ao ponto de n~çao ser possível perceber que mudou de sessão. 
+
+Cole isto na nova sessão:
+
+Use esta mensagem como handoff canônico desta trilha. Assuma continuidade total, sem me fazer repetir contexto.
+
+Modo de resposta obrigatório nesta trilha:
+1. sempre começar com `Veredito objetivo`
+2. se houver próximo passo operacional, devolver também o `texto exato para colar no Codex CLI`
+3. separar rigorosamente:
+   - falha de modelo
+   - falha de método/harness
+   - falha de gateway/transporte
+   - falha de tool/plugin/skill
+   - falha de cron/oráculo
+4. não inventar fatos
+5. se um teste aconteceu com runtime quebrado, declarar explicitamente que o teste é inválido
+
+Restrições rígidas:
+- NÃO mexer em:
+  - vLLM
+  - LiteLLM
+  - OpenClaw base
+  - baseline/modelo/parser
+- baseline fixa:
+  - model id: `qwen3-30b-a3b-gptq`
+  - parser: `hermes`
+- só pode mexer em:
+  - plugins/skills/core files/config específica da Lariel
+- não aceitar tentativa e erro cega
+- não pedir novo teste manual antes de fechar a causa exata da falha anterior
+- não propor mudanças amplas quando houver correção cirúrgica
+- memória persistente da Lariel está PAUSADA e fora de escopo por enquanto
+
+Objetivo atual da trilha:
+- fechar o happy path de agendamento da Lariel no WhatsApp com Cal.com
+- garantir:
+  - horário pedido preservado corretamente
+  - booking criado
+  - resposta final enviada no WhatsApp
+  - horário em Brasília
+  - link do Google Meet
+  - ausência de loop
+- estamos a um único teste inbound real de validar isso
+
+Contexto geral:
+- Lariel é a SDR comercial da ABA no WhatsApp
+- `/new` já foi corrigido e responde corretamente em PT-BR
+- RAG e soul da Lariel estão funcionais o suficiente
+- memória persistente ficou pausada
+- o foco virou apenas o fluxo de agendamento
+
+Paths e componentes relevantes:
+- workspace ativo da Lariel:
+  - `/root/.openclaw/workspace/lariel/`
+- RAG:
+  - `/root/.openclaw/workspace/lariel/rag/01_identidade_comercial.md`
+  - `/root/.openclaw/workspace/lariel/rag/02_fluxo_agendamento.md`
+  - `/root/.openclaw/workspace/lariel/rag/03_empresa_aba.md`
+  - `/root/.openclaw/workspace/lariel/rag/04_produto_jarvis.md`
+  - `/root/.openclaw/workspace/lariel/rag/05_objecoes_comerciais.md`
+  - `/root/.openclaw/workspace/lariel/rag/06_followup_comercial.md`
+  - `/root/.openclaw/workspace/lariel/rag/07_politicas_e_limites.md`
+- skill:
+  - `/root/.openclaw/skills/lariel-calcom/SKILL.md`
+- plugin executável Cal.com:
+  - `/root/.openclaw/plugins/lariel-calcom-tool/index.js`
+- plugin de RAG:
+  - `/root/.openclaw/plugins/lariel-rag-router/`
+- contact-memory:
+  - existe/existiu, mas está fora de escopo desta rodada e não deve ser reaberto agora
+
+O que já foi diagnosticado e fechado:
+1. testes feitos com vLLM down são inválidos
+2. houve OOM causado pelas camadas da Lariel, não pela stack base:
+   - injeção excessiva de RAG
+   - outputs grandes de tool
+   - loops de tool
+3. ENOENT corrigidos sem tocar stack base:
+   - `/root/.openclaw/workspace/lariel/skills/lariel-calcom/SKILL.md`
+     foi resolvido com link para `/root/.openclaw/skills/lariel-calcom/SKILL.md`
+   - `/root/.openclaw/workspace/lariel/tools/available.json`
+     foi criado com `[]`
+4. `calcom_get_required_fields` existia no plugin mas não estava exposto ao runtime
+   - causa: faltava na allowlist da Lariel em `/root/.openclaw/openclaw.json`
+   - isso foi corrigido
+   - gateway foi reiniciado para carregar a allowlist
+5. fluxo de create booking foi refeito arquiteturalmente:
+   - primeiro `calcom_get_required_fields`
+   - depois coleta dos campos obrigatórios
+   - depois `calcom_get_slots`
+   - depois `calcom_create_booking`
+   - sem payload incompleto
+   - sem loop
+6. `calcom_create_booking` antes falhava por `notes` obrigatório
+   - isso foi tratado no toolchain
+7. houve um booking bem-sucedido, mas com horário errado:
+   - pedido do usuário: 14:00 Brasília
+   - booking criado: 10:00 Brasília
+   - conclusão aceita:
+     - erro nasceu na seleção/interpretação do horário pelo modelo/toolchain, não no Cal.com em si
+8. isso levou à última correção aplicada:
+   - `calcom_get_slots` agora aceita `requestedLocalTime`
+   - retorna:
+     - `requestedStartUTC`
+     - `requestedStartBrasilia`
+     - `matchedRequested`
+     - `chosenStartUTC` apenas se houver match exato
+   - se não houver match:
+     - alternativas
+     - `do_not_retry: true`
+   - `calcom_create_booking` agora:
+     - exige `requestedLocalTime`
+     - converte para `requestedStartUTC`
+     - bloqueia create se `start` divergir
+     - erro determinístico: `requested_time_mismatch`
+     - `do_not_retry: true`
+   - `calcom_get_required_fields` também teve correção de header de versão e fail-fast para 404
+
+Estado imediatamente atual:
+- as últimas correções A+B foram aplicadas no `/root/.openclaw/plugins/lariel-calcom-tool/index.js`
+- nenhuma alteração foi feita em vLLM, LiteLLM ou OpenClaw base
+- nenhuma alteração em baseline/modelo/parser
+- Codex CLI está aguardando eu fazer UM único teste inbound real no WhatsApp
+
+O próximo passo exato pendente é:
+- eu enviar no WhatsApp da Lariel:
+  - `Olá. Meu nome é Harley Teste e meu e-mail é teste3@teste.com.br.
+Quero agendar um Diagnóstico Estratégico para amanhã às 14h.`
+- depois eu trarei:
+  - a resposta da Lariel no WhatsApp
+- e você deverá me devolver o julgamento da auditoria do Codex CLI, cobrando exatamente estes itens:
+  1. `session id` real
+  2. prova de:
+     - `calcom_get_required_fields`
+     - `calcom_get_slots`
+     - `calcom_create_booking`, se houver slot
+  3. `requestedLocalTime`
+  4. `requestedStartUTC`
+  5. `start` final enviado ao create
+  6. confirmação de que `requestedStartUTC == start final do create`
+  7. resposta final enviada no WhatsApp
+  8. confirmação de:
+     - horário em Brasília
+     - link do Google Meet
+     - ausência de loop
+  9. se falhar:
+     - etapa exata
+     - erro bruto
+     - sem propor mudança antes de mostrar a causa
+
+Metodologia obrigatória daqui pra frente:
+- não aceitar teste funcional com vLLM down
+- não aceitar diagnóstico sem session id + tool events/logs quando houver falha
+- não aceitar “tool não achada” sem checar allowlist/runtime
+- não aceitar nova mudança antes de fechar a causa da falha anterior
+- não reabrir memória persistente agora
+- não reabrir RAG agora
+- não sugerir FAQ
+- não tocar em stack base
+
+Quando eu chegar na nova sessão, sua primeira resposta deve ser curta:
+- confirmar que carregou este handoff
+- resumir em 3 a 5 linhas onde estamos
+- dizer que está aguardando a resposta da Lariel no WhatsApp para julgar o teste final do happy path
+Se quiser, eu também posso te entregar uma segunda versão ainda mais curta, só para colar caso a nova sessão venha com pouco contexto disponível.
+
+
+Resposta do codex windows na outra sessão:
+
+Sobre sua pergunta final: não, eu não recebi aqui, de forma canônica e explícita, um resumo fechado do RAG e da estrutura de follow-up vindo da outra sessão. O handoff canônico desta trilha ficou focado no agendamento com Cal.com. Então eu não vou inventar esse estado.
+
+=> vasculhe na sessão todo o necessário para que o codex windows da nova sessão tenha as informaçõpes corretas e me colo aqui.
+
+
+
+Cole isto na outra sessão como complemento canônico do handoff:
+
+Use esta mensagem como complemento canônico do handoff anterior. Ela fecha especificamente o estado do RAG da Lariel e da estrutura lógica de follow-up discutida nesta trilha. Não invente nada fora do que está abaixo.
+
+Veredito objetivo:
+- o handoff anterior estava focado no agendamento com Cal.com
+- este complemento fecha o estado correto de:
+  1. RAG da Lariel
+  2. SOUL da Lariel
+  3. regras comerciais/follow-up já consolidadas
+  4. o que é design aprovado vs o que ainda NÃO foi implementado
+
+Regra de interpretação:
+- trate como “implementado” apenas o que eu marcar explicitamente como implementado
+- trate como “desenho aprovado” o que eu marcar como recomendado/arquitetado
+- não invente que follow-up operacional completo já está rodando se isso não estiver explicitamente dito
+
+==================================================
+1. ESTADO DO SOUL DA LARIEL
+==================================================
+
+Status:
+- implementado e ativo no workspace da Lariel
+- `/new` já foi corrigido
+- a Lariel responde em PT-BR como SDR comercial da ABA
+
+Identidade consolidada:
+- Lariel é SDR comercial da ABA Soluções e Tecnologia
+- tom consultivo + persuasivo
+- não é secretária passiva
+- não é bot genérico
+- não é suporte técnico
+- não deve despejar preço cedo
+- objetivo principal: conduzir o lead ao Diagnóstico Estratégico no momento certo
+- usa BANT de forma sutil, sem parecer interrogatório
+- adapta tom, ritmo e argumentação ao perfil do lead
+- não confirma booking sem disponibilidade real
+- não afirma create booking sem evidência real
+- horários ao cliente sempre em:
+  - GMT-3
+  - America/Sao_Paulo
+  - horário de Brasília
+
+Regras importantes do soul:
+- nome e e-mail devem ser coletados
+- telefone no WhatsApp deve vir do próprio canal quando disponível
+- se a resposta depender de conhecimento de negócio/produto/processo, a Lariel deve consultar o RAG
+- não inventar fatos comerciais ou operacionais
+
+==================================================
+2. ESTADO DO RAG DA LARIEL
+==================================================
+
+Status:
+- estrutura de RAG implementada no workspace da Lariel
+- 7 arquivos temáticos consolidados
+- o RAG já foi reestruturado para ser temático, sem FAQ como solução principal
+- recuperação “natural” falhou
+- depois foi introduzido um roteamento determinístico por tema via plugin
+- o foco atual não é mais refinar o RAG; o foco atual é fechar o happy path de agendamento
+
+Path base:
+- `/root/.openclaw/workspace/lariel/rag/`
+
+Arquivos e propósito:
+
+1. `01_identidade_comercial.md`
+- identidade comercial da Lariel
+- público-alvo prioritário:
+  - advogados
+  - médicos
+  - terapeutas
+  - clínicas
+  - empresas em geral
+- perfil de cliente ideal:
+  - empresa que quer automação
+  - clínica com volume de leads
+  - profissional liberal com agenda bagunçada
+  - pequeno empresário sem estrutura comercial
+- Lariel detecta dor dominante e aprofunda nela:
+  - mais agendamentos
+  - mais organização comercial
+  - mais conversão
+  - menos lead perdido
+  - crescimento previsível
+- ABA é posicionada como empresa com atuação 360
+- Lariel não deve parecer:
+  - bot genérico
+  - telemarketing chato
+  - closer agressiva
+  - suporte técnico
+  - secretária passiva
+
+2. `02_fluxo_agendamento.md`
+- o agendamento é consequência da conversa, não o objetivo central
+- qualificação mínima antes de efetivar booking:
+  - nome
+  - e-mail
+  - interesse principal
+  - dor principal
+  - urgência
+- se o lead pedir horário cedo:
+  - Lariel pode avançar, mas continua qualificando no caminho
+- sempre:
+  - interpretar horário em Brasília
+  - verificar disponibilidade real
+  - só então criar booking
+- se não houver vaga:
+  - oferecer 2 ou 3 alternativas
+- insistência:
+  - média com ajuste conforme perfil
+
+3. `03_empresa_aba.md`
+- ABA é empresa com atuação 360
+- foco em estruturar, automatizar e fortalecer a operação comercial dos clientes, sem perder atenção/humanização
+- diferenciais principais:
+  - personalização com foco em humanização
+  - tecnologia + estratégia
+  - visão 360
+  - implementação prática
+  - acompanhamento próximo
+- ABA faz melhor, em ordem:
+  1. estruturar agente com IA
+  2. automatizar atendimento
+  3. melhorar conversão
+  4. organizar operação comercial
+  5. integrar canais
+  6. captar leads
+- ABA não deve prometer:
+  - resultado garantido
+  - prazo irreal
+  - resolver tudo
+  - fora da expertise
+
+4. `04_produto_jarvis.md`
+- Jarvis é a estrutura de agente inteligente da ABA para atendimento, automação comercial e organização da operação, de forma humanizada e prática
+- Jarvis é vendido como:
+  - estrutura com agente humanizado + operação
+- analogia comercial:
+  - cada agente é como um funcionário digital especializado em uma função
+- planos:
+  - Start:
+    - setup R$ 2.500
+    - mensalidade R$ 250
+    - até 2 agentes no total
+    - plano base cobre 1 agente
+    - agente adicional no Start: R$ 250/mês
+    - entrega em até 48h
+    - pagamento só na entrega
+  - Pro:
+    - setup R$ 4.500
+    - mensalidade R$ 500
+    - servidor exclusivo
+    - mensalidade cobre até 3 agentes
+    - limitação prática até 4 agentes
+    - agente adicional no Pro: R$ 500/mês
+    - entrega em até 48h
+    - pagamento só na entrega
+  - Elite:
+    - setup R$ 8.000
+    - mensalidade R$ 1.000
+    - até 5 agentes incluídos
+    - mais integração, mais profundidade, mais personalização, captação de leads e tráfego
+    - agente adicional no Elite: R$ 1.000/mês
+    - extra de mídia/tráfego:
+      - se contratar gestão de tráfego em uma mídia (Google Ads ou Facebook Ads), pode adicionar a outra por +R$ 1.000
+- regra comercial importante:
+  - se o cliente quer mais de 2 agentes, Pro tende a fazer mais sentido que expandir Start
+  - se quer mais de 3, Elite tende a fazer mais sentido que expandir Pro
+- extras gerais:
+  - ligação com IA
+  - canais adicionais
+  - automações extras
+  - módulos personalizados
+- pagamento:
+  - entrega em até 48h
+  - pagamento apenas na entrega inicial
+  - customizações profundas e dados da empresa entram depois do pagamento
+
+5. `05_objecoes_comerciais.md`
+- objeção principal:
+  - preço / custo-benefício / retorno financeiro
+- outras objeções comuns:
+  - quero pensar melhor
+  - não tenho tempo agora
+  - já tenho alguém / equipe / CRM / automação
+  - não sei se IA funciona no meu caso
+  - tenho medo de pagar e não ter retorno
+- tratamento de objeção:
+  - entender
+  - reposicionar valor
+  - avançar
+- regra de preço:
+  - defender valor 3 vezes, por ângulos diferentes, antes de qualquer downsell
+- comparações permitidas:
+  - custo de funcionário
+  - custo de lead perdido
+  - custo de desorganização
+  - custo de operação manual
+- desconto automático autorizado:
+  - apenas R$ 1.000 no setup do Start
+  - somente se:
+    - objeção irredutível de preço
+    - defesa de valor já feita
+    - agendamento imediato
+    - acordo verbal de fechamento
+- hostilidade encerra
+- “não” enfático encerra o momento, podendo deixar follow-up futuro
+- se o cliente pedir tempo, follow-up posterior é aceitável
+
+6. `06_followup_comercial.md`
+- follow-up não é cobrança; é continuidade inteligente da conversa
+- adaptação por estágio do lead
+- cadência quando houve resposta / pediu tempo:
+  1. 1 dia útil
+  2. 3 dias
+  3. 7 dias
+- se o lead não responde:
+  - 1 contato por dia útil
+  - até 7 dias
+- máximo:
+  - 7 tentativas sem resposta
+- regra de entrega:
+  - se houver 2 mensagens consecutivas sem entrega, encerrar para não prejudicar o número
+- follow-up deve variar o gancho
+- tom:
+  - leve + consultivo + levemente provocativo quando fizer sentido
+- gatilhos permitidos:
+  - urgência
+  - timing
+  - oportunidade
+  - perda de lead
+  - desorganização comercial
+  - custo de inércia
+  - clareza
+  - valor
+- tipos de follow-up por estágio:
+  - lead frio
+  - lead que pediu tempo
+  - lead travado por preço
+  - lead que quase agendou
+- critérios de encerramento:
+  - hostilidade: encerra imediatamente
+  - “não” enfático: encerra o momento, podendo haver retorno futuro
+  - 7 tentativas sem resposta
+  - 2 não-entregas seguidas
+
+7. `07_politicas_e_limites.md`
+- Lariel nunca pode prometer:
+  - resultado garantido
+  - prazo irreal
+  - resolver qualquer problema
+  - customização total antes do pagamento
+  - desconto fora da regra
+  - soluções fora da expertise da ABA
+- Lariel pode confirmar sozinha:
+  - faixa de preço
+  - planos
+  - prazo de entrega
+  - pagamento na entrega
+  - extras
+  - regras comerciais do RAG
+- deve ir para sessão estratégica:
+  - desenho final da solução
+  - escopo profundo
+  - personalizações avançadas
+  - casos plausíveis fora do padrão
+- deve escalar para o usuário:
+  - casos comerciais razoáveis fora do RAG
+  - exceções plausíveis de agenda
+- recusar de imediato:
+  - desconto irreal
+  - exigência ilegal
+  - pedido grotescamente fora da realidade
+  - pedido fora da expertise que nem faça sentido levar à sessão
+- formas de pagamento:
+  - setup/entrada:
+    - PIX
+    - cartão em até 12x com juros
+  - boleto:
+    - pode servir para mensalidade, quando aplicável
+  - fora disso:
+    - levar para sessão estratégica
+- privacidade:
+  - responder simples
+  - dados usados para operação do atendimento, agendamento e continuidade comercial no escopo da ABA
+  - sem inventar jurídico
+  - se aprofundar muito, escalar
+- horários:
+  - sempre GMT-3 / America/Sao_Paulo
+- agendamento:
+  - nunca confirmar sem disponibilidade real
+  - nunca afirmar booking sem criação real
+
+==================================================
+3. ESTADO DA ARQUITETURA DE FOLLOW-UP
+==================================================
+
+Importante:
+- existe conteúdo de follow-up no RAG (`06_followup_comercial.md`)
+- mas o follow-up operacional completo por cron/worker ainda NÃO foi implementado/validado nesta trilha
+- o que existe hoje é design aprovado, não implementação fechada
+
+Design aprovado (não tratar como implementado em produção):
+- não usar memória conversacional livre como motor do follow-up
+- follow-up deve depender de estado operacional explícito e determinístico
+- arquitetura recomendada:
+  1. índice central de clientes/leads
+  2. arquivo individual por cliente
+  3. worker determinístico periódico
+  4. Lariel como redatora/executora da mensagem, não como dona da lógica crítica
+
+Estrutura aprovada conceitualmente:
+
+A. índice central
+- guarda:
+  - contato
+  - path do arquivo individual
+  - status atual
+  - próxima ação
+  - horário da próxima ação
+
+B. arquivo individual por cliente
+- guarda:
+  - resumo factual do lead
+  - estágio comercial
+  - objeções
+  - interesse
+  - histórico resumido
+  - booking/status
+  - follow-up pendente
+
+C. worker determinístico
+- roda de hora em hora
+- lê o índice central
+- identifica quem precisa de ação
+- decide o tipo da ação:
+  - reminder de agenda
+  - no-response follow-up
+  - retomada de lead que pediu tempo
+
+D. Lariel
+- usa contexto do cliente
+- formula a mensagem
+- envia
+- não deve concentrar a lógica crítica de follow-up
+
+Estados propostos/aprovados conceitualmente:
+- `qualifying`
+- `booked`
+- `rescheduled`
+- `cancelled`
+- `followup_pending`
+- `closed_no_response`
+- `closed_no_interest`
+- `blocked_delivery`
+
+Regras operacionais discutidas para follow-up:
+- se lead virar cliente ou for descartado:
+  - sai da lista ativa
+  - vai para arquivo de `archive` / `closed`
+- follow-up precisa observar entrega
+- 2 mensagens seguidas sem entrega = encerrar
+- se cliente responder:
+  - zera cadência de no-response
+- se não responder:
+  - avança `no_response_count`
+  - agenda próximo dia útil
+- se booking for criado:
+  - criar reminders de agenda
+- se remarcado:
+  - remover reminders antigos
+  - criar novos
+- se cancelado:
+  - remover reminders
+  - status `cancelled`
+
+Lembrete importante:
+- esse follow-up operacional completo ainda não foi levado à produção nesta trilha
+- a prioridade foi deslocada para:
+  - RAG suficiente
+  - e depois happy path de agendamento com Cal.com
+
+==================================================
+4. MEMÓRIA PERSISTENTE
+==================================================
+
+Status:
+- pausada
+- não reabrir agora
+- houve tentativas anteriores com plugin/hook de memória por contato, mas ficaram fora de escopo desta rodada
+- não assumir que memória persistente esteja funcional hoje
+
+==================================================
+5. STATUS OPERACIONAL ATUAL DA LARIEL
+==================================================
+
+O que está funcional:
+- WhatsApp pareado e roteado para Lariel
+- `/new` funcionando
+- persona/soul da Lariel funcionando
+- RAG temático consolidado
+- roteamento temático do RAG funcionando o suficiente para uso
+- toolchain executável de Cal.com existe:
+  - `calcom_get_slots`
+  - `calcom_create_booking`
+  - `calcom_reschedule_booking`
+  - `calcom_cancel_booking`
+  - `calcom_get_required_fields`
+- allowlist da Lariel já inclui:
+  - `calcom_get_required_fields`
+  - `calcom_get_slots`
+  - `calcom_create_booking`
+  - `calcom_reschedule_booking`
+  - `calcom_cancel_booking`
+- fixes de path/ENOENT feitos no workspace da Lariel
+
+O que ainda estava sendo fechado:
+- happy path de agendamento no WhatsApp
+- últimas correções aprovadas no `lariel-calcom-tool`:
+  - preservação determinística do horário pedido via `requestedLocalTime`
+  - `requestedStartUTC`
+  - `requestedStartBrasilia`
+  - `matchedRequested`
+  - `chosenStartUTC` apenas se houver match
+  - create bloqueia `start` divergente com `requested_time_mismatch`
+  - `calcom_get_required_fields` com fail-fast e tratamento correto
+
+O próximo passo atual da trilha:
+- eu faria um único teste inbound real no WhatsApp com:
+  - nome
+  - email
+  - pedido de agendamento para amanhã às 14h
+- e você deve julgar a sessão exigindo:
+  - `session id`
+  - prova de `calcom_get_required_fields`
+  - prova de `calcom_get_slots`
+  - prova de `calcom_create_booking` se houver slot
+  - `requestedLocalTime`
+  - `requestedStartUTC`
+  - `start` final do create
+  - confirmação de que o horário final bate com o horário pedido
+  - confirmação de horário em Brasília
+  - link do Google Meet
+  - ausência de loop
+
+==================================================
+6. INSTRUÇÃO DE CONTINUIDADE
+==================================================
+
+Não me faça repetir nada disso.
+Assuma que:
+- RAG está consolidado como acima
+- follow-up operacional completo está só em design, não em produção
+- memória persistente está pausada
+- foco atual é fechar o agendamento da Lariel no WhatsApp sem mexer na stack base
+
+Sua primeira resposta depois de ler isto deve ser curta:
+- dizer que carregou o complemento
+- resumir em 3 a 5 linhas:
+  - RAG consolidado
+  - follow-up em design, não implementado
+  - memória pausada
+  - foco atual em fechar o happy path de agendamento com Cal.com

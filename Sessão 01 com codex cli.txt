@@ -1,0 +1,601 @@
+Não faça enxuto, faça o mais detalhado que conseguir. Quero que a nova sessão o mais igual possível a essa.
+
+Cole isto na nova sessão:
+
+Contexto completo desta thread. Quero que você assuma esta conversa como continuação direta, sem me fazer repetir contexto e sem reabrir hipóteses já encerradas.
+
+Papel que você deve manter:
+- Atuar como juiz técnico e conselheiro estratégico.
+- Quando eu colar saídas do Codex CLI, você deve:
+  1. dar veredito objetivo
+  2. se houver próximo passo, me devolver o texto exato para eu colar no Codex CLI
+- Não invente fatos.
+- Não reabra trilhas já descartadas sem motivo forte.
+- Não me faça repetir explicações que já foram fechadas.
+- Se houver dúvida entre "problema do modelo" vs "problema do método/harness/gateway", seja rigoroso e separe as coisas.
+
+Minha preferência de comunicação:
+- Respostas diretas, sem floreio.
+- Se algo está errado, diga objetivamente.
+- Se algo é inconclusivo, diga inconclusivo.
+- Se eu pedir checkpoint/contexto, entregue detalhado.
+- Eu fico irritado quando o contexto deriva e quando o modelo começa a repetir explicações em vez de responder a pergunta concreta.
+
+Objetivo atual:
+- Levar a baseline candidata para canary pequeno em produção controlada.
+- Não abrir nova frente de LLM agora.
+- Não mexer em parser/modelo/config sem necessidade.
+- A exploração principal de LLMs terminou por agora.
+
+Estado atual da baseline candidata:
+- Modelo atual no vLLM:
+  - JunHowie/Qwen3-30B-A3B-Instruct-2507-GPTQ-Int4
+- Model id servido:
+  - qwen3-30b-a3b-gptq
+- Model id no OpenClaw/LiteLLM:
+  - litellm/qwen3-30b-a3b-gptq
+- Quantização:
+  - gptq_marlin
+- Parser atual:
+  - hermes
+- max-model-len:
+  - 65536
+- KV cache:
+  - FP8
+- Serviços finais:
+  - vllm.service active
+  - litellm.service active
+  - openclaw-gateway active
+
+Fallback seguro:
+- Qwen/Qwen2.5-32B-Instruct-AWQ
+- Esse é o rollback operacional seguro.
+- Não perder isso de vista.
+
+Classificação final das LLMs testadas:
+- Baseline operacional candidata:
+  - JunHowie/Qwen3-30B-A3B-Instruct-2507-GPTQ-Int4
+- Baseline fallback:
+  - Qwen/Qwen2.5-32B-Instruct-AWQ
+- Candidatas secundárias:
+  - Qwen/Qwen2.5-32B-Instruct-GPTQ-Int4
+  - Qwen/Qwen2.5-Coder-32B-Instruct-AWQ (parcial)
+- Parked / inconclusivas:
+  - avoroshilov/DeepSeek-R1-Distill-Qwen-32B-GPTQ_4bit-128g
+  - Qwen/Qwen3.5-27B-GPTQ-Int4
+  - Hermes-4-14B-AWQ-4bit
+- Descartadas:
+  - Firworks/Hermes-4.3-36B-nvfp4
+  - ISTA-DASLab/Mistral-Small-3.1-24B-Instruct-2503-GPTQ-4b-128g
+  - Qwen/Qwen3.5-35B-A3B-GPTQ-4bit
+
+Importante sobre parser:
+- Eu perguntei se valia trocar para qwen_xml ou qwen_coder.
+- A decisão foi:
+  - não trocar agora
+  - manter hermes
+  - no máximo monitorar
+  - só abrir rodada de parser depois, se houver motivo real
+  - se abrir, testar qwen_coder antes de qwen_xml
+
+Histórico técnico resumido da baseline candidata:
+1. Qwen3-30B-A3B-GPTQ passou nos mínimos de vLLM e LiteLLM:
+   - T1 sem tool: PASS
+   - T2 com 1 tool + required: PASS
+   - T3 LiteLLM sem tool: PASS
+   - T4 LiteLLM com tool + required: PASS
+2. No OpenClaw mínimo:
+   - houve comportamento inicialmente ambíguo
+   - análise posterior mostrou que houve toolCall real e toolResult real
+   - o problema era síntese final fraca, não ausência de tool execution
+3. Depois ela entrou em trilha formal de qualificação real:
+   - F0 smoke
+   - F1 message
+   - F2 cron
+   - F3 operacional 3–6 tools
+   - F4 guardrails
+   - F5 mini-soak serial
+4. Houve vários falsos negativos metodológicos ao longo do caminho:
+   - estouro de contexto por harness ruim
+   - sessão contaminada
+   - gateway 1006/1008 por restart/token mismatch
+   - guardrail testado no caminho errado (openclaw agent puro em vez de policy path)
+5. Tudo isso foi corrigido e a baseline candidata fechou.
+
+Lições/método já aprendidos e que NÃO devem ser esquecidos:
+- Não confiar em teste "sem tool" se tools_count não estiver realmente zerado ou entendido.
+- No OpenClaw:
+  - tools.allow=[] sozinho NÃO zera tools
+  - para zero tools real:
+    - tools.allow=[]
+    - tools.deny=["*"]
+    - sem alsoAllow
+- `openclaw agent` puro NÃO é o caminho certo para validar guardrails de envelope.
+- Guardrails reais vivem no policy runner:
+  - /root/openclaw_guardrail_runner.py
+- Nenhum caso deve rodar sem budget check prévio.
+- Regra de budget:
+  - <= 85% do contexto: run
+  - 85–95%: degrade
+  - >95%: block
+- Timeout com trabalho órfão não pode gerar retry.
+- Oráculo canônico para cron:
+  - openclaw cron list --json
+- Não confiar na resposta do agente para dizer se há job órfão.
+- Se houver fallback crítico, 500 em cascata, OOM, EngineDeadError ou cron órfão não removível:
+  - hard-stop
+- Se rollback for acionado:
+  - a rodada termina
+  - não continuar testando no mesmo embalo
+
+Detalhe importante sobre falsos negativos:
+- Eu explicitamente reclamei várias vezes que o método do Codex estava produzindo falso negativo.
+- Isso estava correto.
+- Em várias rodadas, o problema não era o modelo, e sim:
+  - harness contaminado
+  - sessão histórica
+  - bootstrap inflado
+  - policy path errado
+  - token mismatch do runner
+  - restart/SIGTERM do gateway na janela do teste
+
+Guardrails validados:
+- F4 soft:
+  - degrade.applied = true
+  - degrade.max_tokens_effective = 256
+- F4 hard:
+  - blocked_cap_hard_prompt
+  - sem chamada ao modelo
+- F4 timeout/cooldown:
+  - timeout_happened = true
+  - cooldown registrado
+  - sem retry em timeout
+
+Qualificação concluída da Qwen3-30B:
+- Phase 1 controlled:
+  - 6/6 ok
+  - 0 fallback
+  - 0 HTTP 500
+  - 0 OOM
+  - 0 EngineDeadError
+  - cron limpo no oráculo canônico
+- Phase 2 controlled:
+  - 15/15 ok
+  - 0 fallback
+  - 0 HTTP 500
+  - 0 OOM
+  - 0 EngineDeadError
+  - cron limpo
+- Phase 3 conc2:
+  - 8/8 ok
+  - concorrência 2
+  - 0 fallback
+  - 0 500
+  - 0 OOM
+  - 0 EngineDeadError
+  - cron limpo
+- Micro-reteste final de cron:
+  - add/run/runs/remove/cleanup ok
+  - openclaw cron list --json => jobs=[]
+- Conclusão:
+  - baseline operacional candidata aprovada
+  - aprovada para canary pequeno
+
+Sobre a fase 1 e fase 2 de produto:
+- A candidata já foi aprovada para teste controlado de produto e depois ampliada.
+- O próximo passo agora é canary pequeno em produção controlada.
+- Não há necessidade de abrir nova frente de LLM neste momento.
+
+Situação de disco:
+- Já houve limpeza de disco importante.
+- Fase 1 de limpeza foi executada e liberou ~30.56 GB.
+- Fase 2 de remoção de Hermes existe como plano, mas não necessariamente foi executada.
+- Se o tema disco voltar, verificar o estado real antes de agir.
+
+Modelos testados que deram trabalho e que NÃO devem ser reabertos sem motivo forte:
+- Hermes-4.3-36B-nvfp4
+- Hermes-4.3-36B-AWQ-4bit
+- Hermes-4-14B-AWQ-4bit
+- ISTA-DASLab/Mistral-Small-3.1-24B-Instruct-2503-GPTQ-4b-128g
+- Qwen/Qwen3.5-35B-A3B-GPTQ-4bit
+- várias trilhas Qwen/DeepSeek/Mistral que pararam por método ou por incapacidade de cumprir objetivo atual
+- Se alguma voltar à conversa, trate como exceção, não default
+
+Tema contexto:
+- Eu deixei claro que modelos 32k-class me deixam desconfortável.
+- A decisão estratégica foi buscar algo com contexto maior real e evitar ficar trocando de LLM em 1–2 meses.
+- A Qwen3-30B-A3B-GPTQ virou a primeira candidata realmente boa nessa direção.
+
+Canary pequeno — estado atual:
+- O runbook do canary foi construído e refinado.
+- Você deve assumir que o canary ainda NÃO foi executado nesta nova sessão, a menos que eu diga o contrário depois.
+- O runbook final foi aprovado com correções.
+- O último ponto antes de executar o canary foi aprovar a versão final corrigida do rollback AWQ.
+
+Pontos críticos do runbook de canary:
+1. Canary em produção real, mas com sessão/agente isolados
+2. Não usar a sessão oficial principal como primeiro alvo
+3. Agente dedicado:
+   - canary_main
+4. Todos os casos do canary usam canary_main
+5. Cron com nome único por execução
+6. Oráculo canônico após cada caso de cron:
+   - openclaw cron list --json
+7. Critérios de stop:
+   - critical_fallback 1006/1008
+   - 500 em cascata
+   - OOM / CUDA OOM
+   - EngineDeadError
+   - cron órfão não removível
+8. Rollback AWQ totalmente explícito e já fechado:
+   - reverte vLLM
+   - reverte LiteLLM
+   - reverte OpenClaw defaults
+   - reverte canary_main.model
+   - garante agents.defaults.models["litellm/qwen25-32b-awq"]
+   - restart em ordem
+   - smoke pós-rollback
+9. Observação operacional:
+   - o token do gateway apareceu várias vezes em terminal/logs/comandos
+   - recomendei rotação de token depois do canary, não antes
+
+Runbook canary final aprovado — pontos importantes:
+- Canary com agente dedicado `canary_main`
+- canary_main usa modelo `litellm/qwen3-30b-a3b-gptq`
+- workspace dedicado
+- tools:
+  - allow: ["read","write","sessions_list","web_search"]
+  - alsoAllow: ["message","cron"]
+- sessão nova por caso
+- cron com nome único usando:
+  - CANARY_RUN_ID
+  - CRON_JOB_NAME="canary_cron_${CANARY_RUN_ID}"
+- casos iniciais:
+  1. chat curto
+  2. message curto
+  3. cron curto + cleanup
+  4. depois monitorar durante a janela curta controlada
+- janela alvo:
+  - 12h
+  - mas incidente crítico aborta antes
+
+Correções obrigatórias já incorporadas no runbook:
+- chat do canary também usa agente canary, não `main`
+- cron não usa nome fixo
+- rollback AWQ está 100% explícito
+- rollback também corrige `canary_main.model`
+- rollback garante chave AWQ em `agents.defaults.models`
+- smoke pós-rollback usa `canary_main` já revertido para AWQ
+
+Rollback AWQ — essência:
+- vLLM volta para `/root/models/Qwen2.5-32B-Instruct-AWQ`
+- served-model-name volta para `qwen25-32b-awq`
+- quantization volta para `awq`
+- LiteLLM volta para `qwen25-32b-awq`
+- OpenClaw:
+  - `agents.defaults.model.primary = litellm/qwen25-32b-awq`
+  - `agents.list[6].model = litellm/qwen25-32b-awq`
+  - `agents.defaults.models["litellm/qwen25-32b-awq"] = {"params":{"temperature":0,"max_tokens":512}}`
+- restarts em ordem:
+  1. vLLM
+  2. readiness 8000 x2
+  3. LiteLLM
+  4. readiness 8001 x2
+  5. gateway
+- smoke pós-rollback:
+  - chat curto
+  - message curto
+
+Se eu pedir sua opinião agora, assuma:
+- Não quero mais exploração ampla de LLM.
+- Quero foco em produto/canary.
+- Quero que você continue rigoroso em distinguir:
+  - falha do modelo
+  - falha do método/harness
+  - falha de gateway/transporte
+  - falha de cron oráculo
+- E quero que, quando eu colar saída do Codex, você me dê:
+  1. veredito
+  2. texto exato para colar de volta no Codex, se houver próximo passo
+
+Estado emocional / preferência importante:
+- Eu já estou cansado de rodadas inúteis e de explicações repetidas.
+- Se você perceber que está começando a repetir ou misturar contexto, seja honesto e me diga.
+- Priorize precisão, continuidade e memória operacional da thread.
+
+Ponto imediato mais provável:
+- revisar/aprovar a execução do canary pequeno com o runbook final
+- ou julgar a saída do Codex após a execução do canary
+
+
+2 mensagens anteriores
+Não. Você não perdeu tempo.
+
+O que esse log mostra é duas coisas diferentes:
+
+A Qwen3-30B-A3B-GPTQ realmente aceitou 64k
+no trecho bom:
+modelo Qwen3-30B-A3B-Instruct-2507-GPTQ-Int4
+max-model-len 65536
+inicializou
+chegou ao server startup
+isso valida a busca por uma LLM 64k+.
+Quem falhou com 64k foi a AWQ 32k
+no trecho ruim:
+o serviço está subindo com /root/models/Qwen2.5-32B-Instruct-AWQ
+max_model_len: 65536
+aí o vLLM reclama corretamente que o checkpoint só deriva 32768
+isso não invalida a Qwen3 30B.
+só mostra que, em algum momento, o serviço voltou para a AWQ sem voltar o max-model-len para 32768.
+Então a leitura correta é:
+
+a busca por 64k valeu
+porque você encontrou uma candidata que de fato sobe em 64k:
+JunHowie/Qwen3-30B-A3B-Instruct-2507-GPTQ-Int4
+o erro atual é de config misturada / rollback parcial / serviço apontando para o modelo errado com o max-model-len errado
+Em outras palavras:
+
+você não perdeu tempo buscando 64k
+você só está vendo um artefato operacional de alternância entre:
+baseline fallback AWQ 32k
+baseline candidata Qwen3 64k
+Minha recomendação objetiva:
+
+trate isso como problema de consistência de config
+confirme qual baseline está ativa agora:
+se for AWQ, max-model-len tem que ser 32768
+se for Qwen3-30B, max-model-len pode ficar 65536
+Resumo curto:
+
+não, não foi tempo perdido
+sim, a Qwen3 30B provou que 64k é viável
+o erro do log é da AWQ 32k tentando subir com config de 64k
+
+
+2 mensagens anteriores
+Sim. Isso é desvio claro do combinado.
+
+O comando aprovado para o canary era com a baseline candidata:
+
+litellm/qwen3-30b-a3b-gptq
+Mas os logs mostram que o vllm.service foi iniciado com:
+
+/root/models/Qwen2.5-32B-Instruct-AWQ
+served-model-name qwen25-32b-awq
+E também tentaram subir essa AWQ com max_model_len=65536, o que é inválido para ela. Então houve duas quebras:
+
+trocaram a LLM no meio do canary
+ainda subiram a fallback com config de contexto errada
+Cole isso para o Codex:
+
+Desvio claro do plano aprovado.
+
+Você trocou a LLM depois do comando do canary.
+O canary aprovado era com:
+- qwen3-30b-a3b-gptq
+
+Mas os logs mostram:
+- vLLM iniciado com /root/models/Qwen2.5-32B-Instruct-AWQ
+- served-model-name qwen25-32b-awq
+
+Além disso, a AWQ foi tentada com max_model_len=65536, o que é inválido para esse checkpoint.
+Então houve duas falhas:
+1. troca indevida de LLM no meio do canary
+2. config inconsistente da fallback
+
+Pare tudo agora. Não execute mais casos do canary.
+
+Quero nesta ordem, sem nova inferência:
+1. explicar exatamente em que momento e por qual comando a stack saiu de qwen3-30b-a3b-gptq para qwen25-32b-awq
+2. listar quais arquivos/configs foram alterados nessa transição:
+   - /etc/systemd/system/vllm.service
+   - /etc/litellm/litellm.yaml
+   - /root/.openclaw/openclaw.json
+3. restaurar a baseline candidata correta do canary:
+   - qwen3-30b-a3b-gptq no vLLM
+   - qwen3-30b-a3b-gptq no LiteLLM
+   - litellm/qwen3-30b-a3b-gptq no OpenClaw/canary_main
+4. provar readiness:
+   - 8000 = 200 x2
+   - 8001 = 200 x2
+   - model id correto exposto em ambos
+5. não retomar o canary ainda; apenas entregar o estado restaurado
+
+Sem novos testes até eu aprovar.
+Resumo curto: o canary atual ficou inválido. Primeiro restaura a baseline candidata correta.
+
+
+
+2 mensagens anteriores
+O desvio aconteceu antes do boot do vllm, na reescrita de config, não durante inferência.
+
+Pelo log, a sequência é esta:
+
+21:43:11
+
+vllm.service já sobe apontando para:
+/root/models/Qwen2.5-32B-Instruct-AWQ
+served_model_name = qwen25-32b-awq
+quantization = awq
+max_model_len = 65536
+isso falha, porque a AWQ só aceita 32768
+21:43:25 / 21:43:35
+
+continua AWQ
+depois max_model_len volta para 32768
+aí a AWQ sobe normalmente
+Então o desvio foi, com alta confiança:
+
+alguém/algum passo trocou o vllm.service de qwen3-30b-a3b-gptq para qwen25-32b-awq
+sem ajustar max-model-len na primeira passada
+depois houve uma segunda correção parcial, ajustando só o 32768
+Isso tem cara de:
+
+rollback parcial disparado
+ou edição indevida do vllm.service
+não tem cara de “o modelo trocou sozinho”
+O que os logs provam objetivamente:
+
+o desvio já estava materializado no ExecStart/args do vllm.service antes do processo subir
+portanto o ponto de falha foi na camada de:
+script/runner
+comando de rollback
+ou edição de arquivo/config
+O que não dá para provar só com esse log:
+
+se também trocaram litellm.yaml
+se também trocaram openclaw.json
+qual comando exato fez isso
+Se você quiser cobrar o Codex com precisão, a pergunta certa é:
+
+Explique exatamente qual comando ou trecho de script reescreveu o vllm.service de qwen3-30b-a3b-gptq para qwen25-32b-awq durante o canary, e por que o primeiro rewrite deixou max-model-len em 65536.
+Resumo curto:
+
+o desvio foi na configuração do serviço
+antes do boot
+com cara de rollback parcial ou rewrite indevido do vllm.service
+
+
+2 mensagens anteriores
+Aprovo a restauração.
+
+Veredito:
+
+a baseline candidata foi restaurada corretamente
+o canary continua pausado
+não retome canary ainda
+o próximo passo certo é análise forense do abort no chat1 do canary, não novo teste
+Cole isso para o Codex:
+
+Aprovado.
+
+Conclusão:
+- a baseline candidata qwen3-30b-a3b-gptq foi restaurada corretamente
+- readiness está OK
+- o canary permanece pausado
+- não execute novos testes ainda
+
+Próxima etapa:
+quero apenas análise forense do abort do canary em `chat1`, sem nova inferência.
+
+Entregue nesta ordem:
+1. causa objetiva do abort no `chat1`
+   - qual foi o gatilho exato
+   - em que camada ocorreu:
+     - modelo
+     - gateway
+     - runner
+     - budget/policy
+     - sessão/canal
+2. timeline curta do incidente
+   - início do chat1
+   - erro/abort
+   - momento do rollback_executed=true
+3. dizer se o abort foi:
+   - falha real da baseline candidata
+   - ou falha operacional/metodológica do canary
+4. dizer se o rollback automático estava correto
+   - ou se foi agressivo demais para esse tipo de falha
+5. recomendação binária:
+   - retomar o canary do ponto zero com ajuste mínimo
+   - ou manter pausado até corrigir a causa
+
+Regras:
+- sem rodar inferência
+- sem mexer em config
+- sem novo rollback
+- só análise dos artefatos:
+  - /tmp/openclaw_agent_trace/canary_exec_20260307T214036Z
+  - /tmp/openclaw_agent_trace/qwen30_restore_20260307T220110Z
+  - /tmp/openclaw_agent_trace/canary_restore_state_20260307T221127Z
+Resumo curto: restauração aprovada; agora descubra por que o canary abortou no primeiro caso antes de tentar de novo.
+
+
+
+2 mensagens anteriores
+Aprovo essa forense.
+
+Veredito:
+
+o abort do canary em chat1 foi falso negativo operacional
+não foi falha da baseline candidata
+a causa foi clara:
+Unknown agent id "canary_main"
+o rollback automático, embora coerente com a regra, foi agressivo demais para erro de setup
+Cole isso para o Codex:
+
+Aprovado.
+
+Conclusão:
+- o abort do canary em chat1 não reprova a qwen3-30b-a3b-gptq
+- foi falha operacional/metodológica de setup:
+  - Unknown agent id "canary_main"
+- o caso não falhou por budget, policy, geração, vLLM ou LiteLLM
+- o rollback automático seguiu a regra, mas foi agressivo demais para erro de identidade/config de agente
+
+Próxima etapa:
+retomar o canary do ponto zero, mas com ajuste mínimo de pré-check e sem rollback automático para erro de setup.
+
+Quero agora, sem executar inferência ainda:
+1. comando exato para verificar existência de `canary_main` no OpenClaw antes do start
+2. comando exato para verificar alinhamento de:
+   - agents.defaults.model.primary
+   - canary_main.model
+   ambos com `litellm/qwen3-30b-a3b-gptq`
+3. nova regra operacional do canary:
+   - se falhar pré-check de agente/config, abortar o start
+   - não executar rollback de modelo
+4. versão revisada do início do runbook com esses pré-checks
+5. confirmação de que, depois desses pré-checks, o canary pode ser retomado do zero
+
+Sem rodar nada ainda.
+Resumo curto: corrige o pré-check do canary_main e retoma o canary; não foi falha do modelo.
+
+
+
+2 mensagens anteriores
+Aprovo.
+
+Veredito:
+
+os pré-checks resolvem o problema exato que derrubou o canary anterior
+a nova regra setup_invalid sem rollback de modelo está correta
+o canary pode ser retomado do zero com segurança metodológica maior
+Cole isso para o Codex:
+
+Aprovado.
+
+Conclusão:
+- os pré-checks de `canary_main` e de alinhamento de modelo estão corretos
+- a nova regra `setup_invalid` está correta
+- erro de setup não deve mais disparar rollback de modelo
+- o canary pode ser retomado do zero
+
+Pode executar o canary com este início revisado.
+
+Regras finais:
+1. health base
+2. pre-check `canary_main` existe
+3. pre-check de alinhamento:
+   - agents.defaults.model.primary
+   - canary_main.model
+   ambos em `litellm/qwen3-30b-a3b-gptq`
+4. se qualquer pré-check falhar:
+   - abortar start
+   - classificar como `setup_invalid`
+   - não executar rollback
+5. só se tudo passar:
+   - iniciar canary do zero na sequência aprovada
+
+Entrega ao final:
+1. resultado dos pré-checks
+2. relatório consolidado do canary
+3. taxa de sucesso
+4. fallback count
+5. 500/OOM/EngineDeadError count
+6. verificações canônicas de cron
+7. estado final dos serviços
+8. veredito binário:
+   - canary aprovado para próxima ampliação
+   - ou rollback para AWQ
+Resumo curto: pode retomar o canary.
